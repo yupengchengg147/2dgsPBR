@@ -336,3 +336,5 @@ def pbr_render(viewpoint_camera, pc: GaussianModel, light:CubemapLight, pipe, bg
 
     return rets
 
+# alpha_tosave = apply_depth_colormap(rets["rend_alpha"].detach().permute(1,2,0).cpu().numpy()).permute(2,0,1)
+# torchvision.utils.save_image(alpha_tosave,alpha_path)

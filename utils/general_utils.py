@@ -189,3 +189,9 @@ def length(x: torch.Tensor, eps: float =1e-20) -> torch.Tensor:
 
 def safe_normalize(x: torch.Tensor, eps: float =1e-20) -> torch.Tensor:
     return x / length(x, eps)
+
+def rescale_tensor(tensor):
+    min_val = torch.min(tensor)
+    max_val = torch.max(tensor)
+    rescaled_tensor = (tensor - min_val) / (max_val - min_val + 1e-10)
+    return rescaled_tensor
