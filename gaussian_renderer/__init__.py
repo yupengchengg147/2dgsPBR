@@ -163,7 +163,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     return rets
 
-def pbr_render(viewpoint_camera, pc: GaussianModel, light:CubemapLight, pipe, bg_color : torch.Tensor,brdf_lut: Optional[torch.Tensor] = None, scaling_modifier = 1.0, override_color = None):
+def pbr_render(viewpoint_camera, pc: GaussianModel, 
+               light:CubemapLight, pipe, bg_color : torch.Tensor, 
+               brdf_lut: Optional[torch.Tensor] = None, 
+               scaling_modifier = 1.0, override_color = None):
     
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
