@@ -166,7 +166,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 def pbr_render(viewpoint_camera, pc: GaussianModel, 
                light:CubemapLight, pipe, bg_color : torch.Tensor, 
                brdf_lut: Optional[torch.Tensor] = None, 
-               scaling_modifier = 1.0, override_color = None):
+               scaling_modifier = 1.0, override_color = None, speed=False):
     
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -187,7 +187,7 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
         scale_modifier=scaling_modifier,
         viewmatrix=viewpoint_camera.world_view_transform,
         projmatrix=viewpoint_camera.full_proj_transform,
-        sh_degree=pc.active_sh_degree,
+        sh_degree=0,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=False,
@@ -313,6 +313,9 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
             'surf_depth': surf_depth,
             'surf_normal': surf_normal,
     })
+
+    if speed:
+        return rets
 
     render_extras = {
         "diffuse_rgb": diffuese_color,

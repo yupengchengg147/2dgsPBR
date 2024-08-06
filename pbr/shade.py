@@ -204,7 +204,7 @@ def pbr_shading(
 
 
 def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_lut):
-    #[h,w,#batch,C]
+    #[#batch, h, w, C]
 
     results = {}
     diffuse_light = dr.texture(
@@ -223,7 +223,7 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
     fg_uv = torch.cat((NoV, roughness), dim=-1)[None,None,:,:] #[1,1,numG,2]
     fg_lookup = dr.texture(
         brdf_lut,  # [1, 256, 256, 2]
-        fg_uv.contiguous(), # [numG,1,1,2]
+        fg_uv.contiguous(), #[1,1,numG,2]
         filter_mode="linear",
         boundary_mode="clamp",
     ).squeeze() # [numG, 2] #用这种方式查询会不会有超出内存？

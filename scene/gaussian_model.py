@@ -173,7 +173,7 @@ class GaussianModel:
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
 
-        if pcd.colors and pcd.colors.shape[0] == fused_point_cloud.shape[0]:
+        if pcd.colors is not None and pcd.colors.shape[0] == fused_point_cloud.shape[0]:
             albedo = inverse_sigmoid(rescale_tensor(torch.tensor(np.asarray(pcd.colors)).float().cuda()))
         else:
             albedo = torch.rand((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")

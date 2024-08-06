@@ -34,27 +34,32 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
     gaussians.training_setup(opt)
 
     cubemap = CubemapLight(base_res=256).cuda()
-    cubemap.build_mips()
+    cubemap.train()
 
     param_groups = [
         {"name": "cubemap", "params": cubemap.parameters(), "lr": opt.brdf_mlp_lr_init},
     ]
+    light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
+
     brdf_mlp_scheduler_args = get_expon_lr_func(lr_init=opt.brdf_mlp_lr_init,
                                         lr_final=opt.brdf_mlp_lr_final,
                                         lr_delay_mult=opt.brdf_mlp_lr_delay_mult,
                                         max_steps=opt.brdf_mlp_lr_max_steps)
     
-    #TODO: 1. light dynamic lr
-    #     2. torch.save(gs, light.state_dict, iterations) , maybe also save light_optimizer?
-
-    light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
-    
+    #TODO: 
+    #     3. object mask for normal loss and distortion loss
+    #     4.verify get_normal 
+    #     5. verify distort
+    #    6. gamma correction
 
     brdf_lut = get_brdf_lut().cuda()
 
     if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
+        (model_params, light_params, lightopt_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+        cubemap.load_state_dict(light_params)
+        light_optimizer.load_state_dict(lightopt_params)
+        print("Restored from checkpoint at iteration", first_iter)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -72,25 +77,33 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
     for iteration in range(first_iter, opt.iterations + 1):        
 
         iter_start.record()
+
+        #dynamic lr
         gaussians.update_learning_rate(iteration)
+        for param_group in light_optimizer.param_groups:
+            if param_group["name"] == "cubemap":
+                lr = brdf_mlp_scheduler_args(iteration)
+                param_group['lr'] = lr
 
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
+        cubemap.build_mips()
         render_pkg = pbr_render(
           viewpoint_camera=viewpoint_cam,
           pc=gaussians,
           light=cubemap,
           pipe=pipe,
           bg_color=background,
-          brdf_lut=brdf_lut)
+          brdf_lut=brdf_lut,
+          speed=True)
 
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        alpha, rend_normal, dist, surf_depth, normal_from_d = render_pkg["render_alpha"], render_pkg["rend_normal"], render_pkg["rend_dist"], render_pkg["surf_depth"], render_pkg["surf_normal"]
+        alpha, rend_normal, dist, surf_depth, normal_from_d = render_pkg["rend_alpha"], render_pkg["rend_normal"], render_pkg["rend_dist"], render_pkg["surf_depth"], render_pkg["surf_normal"]
 
-        diffuse_rgb, specular_rgb, albedo, roughness, metallic = render_pkg["diffuse_rgb"], render_pkg["specular_rgb"], render_pkg["albedo"], render_pkg["roughness"], render_pkg["metallic"]
+        # diffuse_rgb, specular_rgb, albedo, roughness, metallic = render_pkg["diffuse_rgb"], render_pkg["specular_rgb"], render_pkg["albedo"], render_pkg["roughness"], render_pkg["metallic"]
 
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
@@ -99,8 +112,10 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         # regularization
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
         lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+
         normal_error = (1 - (rend_normal * normal_from_d).sum(dim=0))[None]
         normal_loss = lambda_normal * (normal_error).mean()
+        
         dist_loss = lambda_dist * (dist).mean()
 
         total_loss = loss + dist_loss + normal_loss
@@ -112,7 +127,6 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
-
 
             if iteration % 10 == 0:
                 loss_dict = {
@@ -158,10 +172,13 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                light_optimizer.step()
+                light_optimizer.zero_grad(set_to_none=True)
+                cubemap.clamp_(min=0.0,max=1.0)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save((gaussians.capture(), cubemap.state_dict(),light_optimizer.state_dict(),iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
         
 
 
