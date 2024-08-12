@@ -1,0 +1,2 @@
+python pbr_train.py -s ../data/nerf_synthetic/ficus/ -m output/ficus --eval --lambda_dist 1000
+python pbr_render.py -s ../data/nerf_synthetic/ficus/ -m ./output/ficus/ --checkpoint ./output/ficus/chkpnt30000.pth --eval

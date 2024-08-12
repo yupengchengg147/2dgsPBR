@@ -74,6 +74,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
     
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    print(first_iter)
     for iteration in range(first_iter, opt.iterations + 1):        
 
         iter_start.record()
@@ -105,6 +106,9 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
 
         # diffuse_rgb, specular_rgb, albedo, roughness, metallic = render_pkg["diffuse_rgb"], render_pkg["specular_rgb"], render_pkg["albedo"], render_pkg["roughness"], render_pkg["metallic"]
 
+        mask = (render_pkg["rend_alpha"] != 0).all(0)[None,:,:]
+        image = torch.where(mask, render_pkg["render"], background[:,None,None])
+
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
@@ -113,10 +117,10 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
         lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
 
-        normal_error = (1 - (rend_normal * normal_from_d).sum(dim=0))[None]
+        normal_error = (1 - (rend_normal[mask.repeat(3,1,1)] * normal_from_d[mask.repeat(3,1,1)]).sum(dim=0))[None]
         normal_loss = lambda_normal * (normal_error).mean()
         
-        dist_loss = lambda_dist * (dist).mean()
+        dist_loss = lambda_dist * (dist[mask]).mean()
 
         total_loss = loss + dist_loss + normal_loss
         total_loss.backward()
@@ -195,7 +199,8 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+    # parser.add_argument("--checkpoint", type=str, default=None, help="The path to the checkpoint to load.")
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000, 37000, 40_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

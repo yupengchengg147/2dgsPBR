@@ -13,6 +13,7 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import torch.nn.functional as F
+import numpy as np
 
 def mse(img1, img2):
     return (((img1 - img2)) ** 2).view(img1.shape[0], -1).mean(1, keepdim=True)
@@ -80,3 +81,23 @@ def apply_depth_colormap(depth, cmap="turbo", min=None, max=None):
 
     colored_image = apply_colormap(depth, cmap=cmap)
     return colored_image
+
+def viridis_cmap(gray: np.ndarray) -> np.ndarray:
+    """
+    Visualize a single-channel image using matplotlib's viridis color map
+    yellow is high value, blue is low
+    :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
+    :return: (H, W, 3) float32 in [0, 1]
+    """
+    colored = plt.cm.viridis(plt.Normalize()(gray.squeeze()))[..., :-1]
+    return colored.astype(np.float32)
+
+def turbo_cmap(gray: np.ndarray) -> np.ndarray:
+    """
+    Visualize a single-channel image using matplotlib's turbo color map
+    yellow is high value, blue is low
+    :param gray: np.ndarray, (H, W) or (H, W, 1) unscaled
+    :return: (H, W, 3) float32 in [0, 1]
+    """
+    colored = plt.cm.turbo(plt.Normalize()(gray.squeeze()))[..., :-1]
+    return colored.astype(np.float32)
