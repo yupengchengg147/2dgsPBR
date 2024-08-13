@@ -13,3 +13,4 @@ eval
 *.npz
 **/tmp
 submodules/simple-knn/build
+all_test/

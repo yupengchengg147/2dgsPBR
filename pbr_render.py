@@ -136,7 +136,7 @@ def render_sets(dataset : ModelParams, chkp_path: str, pipeline : PipelineParams
 
         (model_params, light_params, _, first_iter) = torch.load(chkp_path)
 
-        gaussians = GaussianModel()
+        gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, shuffle=False)
         gaussians.restore(model_params)
         

@@ -18,6 +18,11 @@ from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
+import torch
+import torch.nn.functional as F
+from scene.cameras import Camera
+import math
+
 class Scene:
 
     gaussians : GaussianModel
@@ -91,3 +96,37 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
+    
+    def get_canonical_rays(self, scale: float = 1.0) -> torch.Tensor:
+        # NOTE: some datasets do not share the same intrinsic (e.g. DTU)
+        # get reference camera
+        ref_camera: Camera = self.train_cameras[scale][0]
+        # TODO: inject intrinsic
+        H, W = ref_camera.image_height, ref_camera.image_width
+        cen_x = W / 2
+        cen_y = H / 2
+        tan_fovx = math.tan(ref_camera.FoVx * 0.5)
+        tan_fovy = math.tan(ref_camera.FoVy * 0.5)
+        focal_x = W / (2.0 * tan_fovx)
+        focal_y = H / (2.0 * tan_fovy)
+
+        x, y = torch.meshgrid(
+            torch.arange(W),
+            torch.arange(H),
+            indexing="xy",
+        )
+        x = x.flatten()  # [H * W]
+        y = y.flatten()  # [H * W]
+        camera_dirs = F.pad(
+            torch.stack(
+                [
+                    (x - cen_x + 0.5) / focal_x,
+                    (y - cen_y + 0.5) / focal_y,
+                ],
+                dim=-1,
+            ),
+            (0, 1),
+            value=1.0,
+        )  # [H * W, 3]
+        # NOTE: it is not normalized
+        return camera_dirs.cuda()
