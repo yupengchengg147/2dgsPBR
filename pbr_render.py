@@ -14,7 +14,7 @@ from scene import Scene
 import os
 from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import pbr_render
+from gaussian_renderer import pbr_render, pbr_render_gshader
 import torchvision
 from pbr import CubemapLight, get_brdf_lut
 
@@ -47,7 +47,7 @@ def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline
     normalRender_path = os.path.join(model_path, name, "ours_{}".format(iteration), "n_Render")
     normalDepth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "n_Depth")
     depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth")
-
+    residual_path = os.path.join(model_path, name, "ours_{}".format(iteration), "residual")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
@@ -57,12 +57,13 @@ def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline
     makedirs(normalRender_path, exist_ok=True)
     makedirs(normalDepth_path, exist_ok=True)
     makedirs(depth_path, exist_ok=True)
+    makedirs(residual_path, exist_ok=True)
 
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         torch.cuda.synchronize()
 
-        render_pkg = pbr_render(
+        render_pkg = pbr_render_gshader(
           viewpoint_camera=view,
           pc=gaussians,
           light=cubemap,
@@ -76,13 +77,17 @@ def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline
         gt = view.original_image[0:3, :, :]
 
 
-        mask = (render_pkg["rend_alpha"] != 0).all(0)[None,:,:]
+        mask = (render_pkg["rend_alpha"] != 0).all(0)[None,:,:] #[1,h,w]
         image = torch.where(mask, render_pkg["render"], background[:,None,None])
+        if render_pkg["color_residul"] is not None:
+            residual = torch.where(mask, render_pkg["color_residul"], background[:,None,None])
+            torchvision.utils.save_image(residual, os.path.join(residual_path, '{0:05d}'.format(idx) + ".png"))
         
         torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        
 
-        diffuse_rgb, specular_rgb, albedo, roughness, metallic = render_pkg["diffuse_rgb"], render_pkg["specular_rgb"], render_pkg["albedo"], render_pkg["roughness"], render_pkg["metallic"]
+        diffuse_rgb, specular_rgb, albedo, roughness, metallic = render_pkg["diffuse_rgb"], render_pkg["specular_rgb"], render_pkg["diffuse"], render_pkg["roughness"], render_pkg["specular"]
         
         diffuse_rgb = torch.where(mask, diffuse_rgb, background[:,None,None])
         specular_rgb = torch.where(mask, specular_rgb, background[:,None,None])

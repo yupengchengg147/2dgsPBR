@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 
 from .light import CubemapLight
+from utils.general_utils import safe_normalize, reflect, dot
+from . import renderutils as ru
 
 
 # Lazarov 2013, "Getting More Physical in Call of Duty: Black Ops II"
@@ -204,7 +206,9 @@ def pbr_shading(
 
 
 def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_lut):
-    #[#batch, h, w, C]
+    
+    # 2DGS-PBR With GSIR shading [minibatch_size=1, height=1, width=num_G, C=3] 
+    # a pic of size (1, num_G)
 
     results = {}
     diffuse_light = dr.texture(
@@ -250,4 +254,56 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
     results["diffuse"] = diffuse_rgb
     results["specular"] = specular_rgb    
     return results
+
+def pbr_shade_2dgs_gshader(light, gb_normal, kd, ks, kr, wo, reflvec, brdf_lut, specular=True):
+    # (1, 1, num_G, C)
+    if specular:
+        diffuse_raw = kd
+        roughness = kr
+        spec_col  = ks
+        diff_col  = 1.0 - ks
+    else:
+        raise NotImplementedError
+
+    # reflvec = safe_normalize(reflect(wo, gb_normal))
+    nrmvec = gb_normal
+    if light.mtx is not None: # Rotate lookup
+        mtx = torch.as_tensor(light.mtx, dtype=torch.float32, device='cuda')
+        reflvec = ru.xfm_vectors(reflvec.view(reflvec.shape[0], reflvec.shape[1] * reflvec.shape[2], reflvec.shape[3]), mtx).view(*reflvec.shape)
+        nrmvec  = ru.xfm_vectors(nrmvec.view(nrmvec.shape[0], nrmvec.shape[1] * nrmvec.shape[2], nrmvec.shape[3]), mtx).view(*nrmvec.shape)
+
+    ambient = dr.texture(light.diffuse[None, ...], nrmvec.contiguous(), filter_mode='linear', boundary_mode='cube')
+    # specular_linear = ambient * specular_tint
+    specular_linear = ambient * diff_col
+
+    if specular:
+        # Lookup FG term from lookup texture
+        NdotV = torch.clamp(dot(wo, gb_normal.squeeze()), min=1e-4)
+        fg_uv = torch.cat((NdotV, roughness), dim=-1)[None,None,:,:]
+        # if not hasattr(light, '_FG_LUT'):
+        #     light._FG_LUT = torch.as_tensor(np.fromfile('scene/NVDIFFREC/irrmaps/bsdf_256_256.bin', dtype=np.float32).reshape(1, 256, 256, 2), dtype=torch.float32, device='cuda')
+        fg_lookup = dr.texture(brdf_lut, fg_uv.contiguous(), filter_mode='linear', boundary_mode='clamp')
+
+        # Roughness adjusted specular env lookup
+        miplevel = light.get_mip(roughness)
+        spec = dr.texture(light.specular[0][None, ...], 
+                          reflvec.contiguous(), 
+                          mip=list(m[None, ...] for m in light.specular[1:]), 
+                          mip_level_bias=miplevel[:,:,None].permute(1,2,0).contiguous(), #[1,1,numG]
+                          filter_mode='linear-mipmap-linear', 
+                          boundary_mode='cube')
+
+        # Compute aggregate lighting
+        # reflectance = specular_tint * fg_lookup[...,0:1] + fg_lookup[...,1:2]
+        reflectance = spec_col * fg_lookup[...,0:1] + fg_lookup[...,1:2]
+        specular_linear += spec * reflectance
+    extras = {"specular": specular_linear}
+
+    diffuse_linear = torch.sigmoid(diffuse_raw - np.log(3.0))
+    extras["diffuse"] = diffuse_linear
+
+    rgb = specular_linear + diffuse_linear
+
+    return rgb, extras
+
 

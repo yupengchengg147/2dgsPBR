@@ -46,6 +46,7 @@ class GaussianModel:
     def __init__(self, sh_degree: int):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree  
+        self.brdf_dim = sh_degree
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -61,20 +62,20 @@ class GaussianModel:
         self.setup_functions()
         self._albedo = torch.empty(0)
         self._roughness = torch.empty(0)
-        self._metallic = torch.empty(0)
+        self._specular = torch.empty(0)
 
     def capture(self):
         return (
-            # self.active_sh_degree,
+            self.active_sh_degree,
             self._xyz,
-            # self._features_dc,
-            # self._features_rest,
+            self._features_dc,
+            self._features_rest,
             self._scaling,
             self._rotation,
             self._opacity,
             self._albedo,
             self._roughness,
-            self._metallic,
+            self._specular,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -83,16 +84,16 @@ class GaussianModel:
         )
     
     def restore(self, model_args, training_args=None):
-        # (self.active_sh_degree, 
-        (self._xyz, 
-        # self._features_dc, 
-        # self._features_rest,
+        (self.active_sh_degree, 
+        self._xyz, 
+        self._features_dc, 
+        self._features_rest,
         self._scaling, 
         self._rotation, 
         self._opacity,
         self._albedo,
         self._roughness,
-        self._metallic,
+        self._specular,
         self.max_radii2D, 
         xyz_gradient_accum, 
         denom,
@@ -118,8 +119,8 @@ class GaussianModel:
         return self.material_activation(self._roughness)
 
     @property
-    def get_metallic(self) -> torch.Tensor:
-        return self.material_activation(self._metallic)
+    def get_specular(self) -> torch.Tensor:
+        return self.material_activation(self._specular)
 
 
     @property
@@ -180,10 +181,10 @@ class GaussianModel:
             albedo = torch.rand((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
 
         roughness = torch.rand((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
-        metallic = torch.rand((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
+        specular = torch.rand((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
         self._albedo = nn.Parameter(albedo.requires_grad_(True))
         self._roughness = nn.Parameter(roughness.requires_grad_(True))
-        self._metallic = nn.Parameter(metallic.requires_grad_(True))
+        self._specular = nn.Parameter(specular.requires_grad_(True))
 
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
@@ -199,7 +200,7 @@ class GaussianModel:
 
             {"params": [self._albedo], "lr": training_args.opacity_lr, "name": "albedo"},
             {"params": [self._roughness], "lr": training_args.opacity_lr, "name": "roughness"},
-            {"params": [self._metallic], "lr": training_args.opacity_lr, "name": "metallic"},
+            {"params": [self._specular], "lr": training_args.opacity_lr, "name": "specular"},
             
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
@@ -231,7 +232,8 @@ class GaussianModel:
         for i in range(self._albedo.shape[1]):
             l.append(f"albedo_{i}")
         l.append("roughness")
-        l.append("metallic")
+        for i in range(self._specular.shape[1]):
+            l.append(f"specular_{i}")
         for i in range(self._scaling.shape[1]):
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
@@ -246,7 +248,7 @@ class GaussianModel:
         normals = self.get_normals.detach().cpu().numpy()
         albedo = self._albedo.detach().cpu().numpy()
         roughness = self._roughness.detach().cpu().numpy()
-        metallic = self._metallic.detach().cpu().numpy()
+        specular = self._specular.detach().cpu().numpy()
 
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
@@ -257,7 +259,7 @@ class GaussianModel:
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals,  f_dc, f_rest, opacities, albedo, roughness, metallic, scale, rotation), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, albedo, roughness, specular, scale, rotation), axis=1)
 
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -285,8 +287,14 @@ class GaussianModel:
             axis=1,
         )
         roughness = np.asarray(plydata.elements[0]["roughness"])[..., np.newaxis]
-        metallic = np.asarray(plydata.elements[0]["metallic"])[..., np.newaxis]
-
+        specular = np.stack(
+            (
+                np.asarray(plydata.elements[0]["specular_0"]),
+                np.asarray(plydata.elements[0]["specular_1"]),
+                np.asarray(plydata.elements[0]["specular_2"]),
+            ),
+            axis=1,
+        )
 
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -327,8 +335,8 @@ class GaussianModel:
         self._roughness = nn.Parameter(
             torch.tensor(roughness, dtype=torch.float, device="cuda").requires_grad_(True)
         )
-        self._metallic = nn.Parameter(
-            torch.tensor(metallic, dtype=torch.float, device="cuda").requires_grad_(True)
+        self._specular = nn.Parameter(
+            torch.tensor(specular, dtype=torch.float, device="cuda").requires_grad_(True)
         )
 
 
@@ -378,7 +386,7 @@ class GaussianModel:
 
         self._albedo = optimizable_tensors["albedo"]
         self._roughness = optimizable_tensors["roughness"]
-        self._metallic = optimizable_tensors["metallic"]
+        self._specular = optimizable_tensors["specular"]
 
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
@@ -410,14 +418,14 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_albedo,new_roughness,new_metallic, new_scaling, new_rotation):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_albedo,new_roughness,new_specular, new_scaling, new_rotation):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
         "opacity": new_opacities,
         "albedo": new_albedo,
         "roughness": new_roughness,
-        "metallic": new_metallic,
+        "specular": new_specular,
         "scaling" : new_scaling,
         "rotation" : new_rotation}
 
@@ -429,7 +437,7 @@ class GaussianModel:
 
         self._albedo = optimizable_tensors["albedo"]
         self._roughness = optimizable_tensors["roughness"]
-        self._metallic = optimizable_tensors["metallic"]
+        self._specular = optimizable_tensors["specular"]
 
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
@@ -460,9 +468,9 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_albedo = self._albedo[selected_pts_mask].repeat(N, 1)
         new_roughness = self._roughness[selected_pts_mask].repeat(N, 1)
-        new_metallic = self._metallic[selected_pts_mask].repeat(N, 1)
+        new_specular = self._specular[selected_pts_mask].repeat(N, 1)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity,new_albedo,new_roughness,new_metallic, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity,new_albedo,new_roughness,new_specular, new_scaling, new_rotation)
 
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -480,11 +488,11 @@ class GaussianModel:
         new_opacities = self._opacity[selected_pts_mask]
         new_albedo = self._albedo[selected_pts_mask]
         new_roughness = self._roughness[selected_pts_mask]
-        new_metallic = self._metallic[selected_pts_mask]
+        new_specular = self._specular[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_albedo,new_roughness,new_metallic, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_albedo,new_roughness,new_specular, new_scaling, new_rotation)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom

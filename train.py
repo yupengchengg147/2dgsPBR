@@ -240,11 +240,11 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             albedo = render_pkg["albedo"]
                             roughness = render_pkg["roughness"]
                             roughness = colormap(roughness.cpu().numpy()[0])
-                            metallic = render_pkg["metallic"]
-                            metallic = colormap(metallic.cpu().numpy()[0])
+                            # metallic = render_pkg["metallic"]
+                            # metallic = colormap(metallic.cpu().numpy()[0])
                             tb_writer.add_images(config['name'] + "_view_{}/albedo".format(viewpoint.image_name), albedo[None], global_step=iteration)
                             tb_writer.add_images(config['name'] + "_view_{}/roughness".format(viewpoint.image_name), roughness[None], global_step=iteration)
-                            tb_writer.add_images(config['name'] + "_view_{}/metallic".format(viewpoint.image_name), metallic[None], global_step=iteration)
+                            # tb_writer.add_images(config['name'] + "_view_{}/metallic".format(viewpoint.image_name), metallic[None], global_step=iteration)
                             tb_writer.add_images(config['name'] + "_view_{}/diffuse_rgb".format(viewpoint.image_name), diffuse_rgb[None], global_step=iteration)
                             tb_writer.add_images(config['name'] + "_view_{}/specular_rgb".format(viewpoint.image_name), specular_rgb[None], global_step=iteration)
                         except:

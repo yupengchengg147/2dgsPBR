@@ -13,7 +13,7 @@ from scene import Scene, GaussianModel
 from pbr import CubemapLight, get_brdf_lut
 
 
-from gaussian_renderer import pbr_render, network_gui, render
+from gaussian_renderer import pbr_render, network_gui, render, pbr_render_gshader
 
 from train import prepare_output_and_logger, training_report
 
@@ -26,7 +26,7 @@ except ImportError:
 
 
 
-def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, metallic=False):
+def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -37,14 +37,14 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
     cubemap.train()
 
     param_groups = [
-        {"name": "cubemap", "params": cubemap.parameters(), "lr": opt.brdf_mlp_lr_init},
+        {"name": "cubemap", "params": cubemap.parameters(), "lr": opt.light_lr_init},
     ]
     light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
 
-    brdf_mlp_scheduler_args = get_expon_lr_func(lr_init=opt.brdf_mlp_lr_init,
-                                        lr_final=opt.brdf_mlp_lr_final,
-                                        lr_delay_mult=opt.brdf_mlp_lr_delay_mult,
-                                        max_steps=opt.brdf_mlp_lr_max_steps)
+    light_scheduler_args = get_expon_lr_func(lr_init=opt.light_lr_init,
+                                        lr_final=opt.light_lr_final,
+                                        lr_delay_mult=opt.light_lr_delay_mult,
+                                        max_steps=opt.light_lr_max_steps)
     
     #TODO: 
     #     3. object mask for normal loss and distortion loss
@@ -76,7 +76,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
     cubemap.base.requires_grad = False
     gaussians.set_requires_grad("albedo", False)
     gaussians.set_requires_grad("roughness", False)
-    gaussians.set_requires_grad("metallic", False)
+    gaussians.set_requires_grad("specular", False)
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -94,7 +94,8 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
 
         if iteration < opt.warmup_iterations:
             # Every 1000 its we increase the levels of SH up to a maximum degree
-            if iteration % 1000 == 0:
+            if iteration % 2 == 0: # for debug
+            # if iteration % 1000 == 0:
                 gaussians.oneupSHdegree()
             render_pkg = render(viewpoint_cam, gaussians, pipe, background)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -104,10 +105,17 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         elif iteration == opt.warmup_iterations:
             cubemap.base.requires_grad = True
         
-            gaussians.set_requires_grad("features_dc", False)
-            gaussians.set_requires_grad("features_rest", False)
+            # gaussians.set_requires_grad("features_dc", False)
+            # gaussians.set_requires_grad("features_rest", False)
 
-            gaussians._albedo.data = gaussians._features_dc.data.clone().squeeze()
+            # from now features[dc, rest] as color residual of eq3, need to be re-initialize
+            with torch.no_grad():
+                gaussians._albedo.data = gaussians._features_dc.data.clone().squeeze()
+                gaussians._features_dc.data = torch.zeros_like(gaussians._features_dc.data)
+                gaussians._features_rest.data = torch.zeros_like(gaussians._features_rest.data)
+            
+            # gaussians._features_dc.grad.zero_()
+            # gaussians._features_rest.grad.zero_()
             gaussians.set_requires_grad("albedo", True)
             gaussians.set_requires_grad("roughness", True)
             
@@ -115,15 +123,16 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             #     gaussians._metallic = None
             # else:
             #     gaussians.set_requires_grad("metallic", True)
-            gaussians.set_requires_grad("metallic", True)
+            gaussians.set_requires_grad("specular", True)
             continue
         else:
             for param_group in light_optimizer.param_groups:
                 if param_group["name"] == "cubemap":
-                    lr = brdf_mlp_scheduler_args(iteration - opt.warmup_iterations)
+                    lr = light_scheduler_args(iteration - opt.warmup_iterations)
                     param_group['lr'] = lr
             cubemap.build_mips()
-            render_pkg = pbr_render(
+            
+            render_pkg = pbr_render_gshader(
             viewpoint_camera=viewpoint_cam,
             pc=gaussians,
             light=cubemap,
@@ -186,7 +195,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
                 training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             else:
                 training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
-                                testing_iterations, scene, pbr_render, 
+                                testing_iterations, scene, pbr_render_gshader, 
                                 (cubemap, pipe, background, brdf_lut)
                                 )
             
@@ -237,7 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    parser.add_argument('--metallic', action='store_true', default=False)
+    # parser.add_argument('--metallic', action='store_true', default=False)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -252,7 +261,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    pbr_training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.metallic)
+    pbr_training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint)
 
     # All done
     print("\nTraining complete.")

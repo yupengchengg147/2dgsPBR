@@ -98,10 +98,10 @@ class OptimizationParams(ParamGroup):
         
         # lr for cubelight
         self.fix_brdf_lr = 0
-        self.brdf_mlp_lr_init = 1.6e-2
-        self.brdf_mlp_lr_final = 1.6e-3 
-        self.brdf_mlp_lr_delay_mult = 0.01
-        self.brdf_mlp_lr_max_steps = 30_000
+        self.light_lr_init = 1.6e-2
+        self.light_lr_final = 1.6e-3 
+        self.light_lr_delay_mult = 0.01
+        self.light_lr_max_steps = 30_000
         
         # lr for materials
         self.specular_lr = 0.0002
