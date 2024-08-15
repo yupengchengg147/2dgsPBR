@@ -27,6 +27,11 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 
+def zero_one_loss(img):
+    zero_epsilon = 1e-3
+    val = torch.clamp(img, zero_epsilon, 1 - zero_epsilon)
+    loss = torch.mean(torch.log(val) + torch.log(1 - val))
+    return loss
 
 def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
     first_iter = 0
@@ -73,6 +78,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
     ema_loss_for_log = 0.0
     ema_dist_for_log = 0.0
     ema_normal_for_log = 0.0
+    ema_alpha_for_log = 0.0
     
     # in warmup iterations, set envmap gradient false, set pbr related para gradient false
     cubemap.base.requires_grad = False
@@ -108,8 +114,8 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             rend_normal  = render_pkg['rend_normal']
             normal_from_d = render_pkg['surf_normal']
 
-            mask = (rend_normal != 0).all(0, keepdim=True)
-            image = torch.where(mask, image, background[:,None,None])
+            # mask = (rend_normal != 0).all(0, keepdim=True)
+            # image = torch.where(mask, image, background[:,None,None])
 
         elif iteration == opt.warmup_iterations:
             cubemap.base.requires_grad = True
@@ -159,8 +165,8 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
 
             alpha, rend_normal, dist, surf_depth, normal_from_d = render_pkg["rend_alpha"], render_pkg["rend_normal"], render_pkg["rend_dist"], render_pkg["surf_depth"], render_pkg["surf_normal"]
             
-            mask = (rend_normal != 0).all(0, keepdim=True)
-            image = torch.where(mask, image, background[:,None,None])
+            # mask = (rend_normal != 0).all(0, keepdim=True)
+            # image = torch.where(mask, image, background[:,None,None])
             
             
         gt_image = viewpoint_cam.original_image.cuda()
@@ -177,7 +183,9 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         # dist_loss = lambda_dist * (dist[mask]).mean()
         dist_loss = lambda_dist * (dist).mean()
 
-        total_loss = loss + dist_loss + normal_loss
+        alpha_loss = 0.001 * zero_one_loss(render_pkg["rend_alpha"])
+
+        total_loss = loss + dist_loss + normal_loss + alpha_loss
         total_loss.backward()
         iter_end.record()
 
@@ -186,12 +194,14 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
+            ema_alpha_for_log = 0.4 * alpha_loss.item() + 0.6 * ema_alpha_for_log
 
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
                     "distort": f"{ema_dist_for_log:.{5}f}",
                     "normal": f"{ema_normal_for_log:.{5}f}",
+                    "alpha": f"{ema_alpha_for_log:.{5}f}",
                     "Points": f"{len(gaussians.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)
@@ -255,7 +265,7 @@ if __name__ == "__main__":
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[5_000, 15000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[15000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[15_000, 30_000])
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
