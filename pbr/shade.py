@@ -306,4 +306,60 @@ def pbr_shade_2dgs_gshader(light, gb_normal, kd, ks, kr, wo, reflvec, brdf_lut, 
 
     return rgb, extras
 
+def gshader_deferred_shading(
+    light: CubemapLight,
+    normals: torch.Tensor,  # [H, W, 3]
+    view_dirs: torch.Tensor,  # [H, W, 3]
+    kd: torch.Tensor,  # [H, W, 3]
+    kr: torch.Tensor,  # [W, 1]
+    ks: torch.Tensor,
+    brdf_lut: torch.Tensor,
+):
+    H, W, _ = normals.shape
+
+    nrmvec = normals.reshape(1, H, W, 3)
+    view_dirs = view_dirs.reshape(1, H, W, 3)
+    diffuse_raw = kd.reshape(1, H, W, 3)
+    roughness = kr.reshape(1, H, W, 1)
+    spec_col = ks.reshape(1, H, W, 3)
+    diff_col = 1.0 - ks
+
+    results = {}
+    reflvec = (
+        2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs
+    )  # [1, H, W, 3]
+
+    ambient = dr.texture(light.diffuse[None, ...], nrmvec.contiguous(), filter_mode='linear', boundary_mode='cube')
+    specular_linear = ambient * diff_col
+
+    NoV = saturate_dot(nrmvec, view_dirs)  # [1, H, W, 1]
+    fg_uv = torch.cat((NoV, roughness), dim=-1)  # [1, H, W, 2]
+    fg_lookup = dr.texture(
+        brdf_lut,  # [1, 256, 256, 2]
+        fg_uv.contiguous(),  # [1, H, W, 2]
+        filter_mode="linear",
+        boundary_mode="clamp",
+    ) 
+    miplevel = light.get_mip(roughness)  # [1, H, W, 1]
+    spec = dr.texture(light.specular[0][None, ...], 
+                          reflvec.contiguous(), 
+                          mip=list(m[None, ...] for m in light.specular[1:]), 
+                        #   mip_level_bias=miplevel[:,:,None].permute(1,2,0).contiguous(), #[1,1,numG]
+                          mip_level_bias=miplevel[..., 0], 
+                          filter_mode='linear-mipmap-linear', 
+                          boundary_mode='cube') # [1, H, W, 3]
+
+    reflectance = spec_col * fg_lookup[...,0:1] + fg_lookup[...,1:2]
+    specular_linear += spec * reflectance
+
+    extras = {"specular_color": specular_linear.squeeze()}
+
+    diffuse_linear = torch.sigmoid(diffuse_raw - np.log(3.0))
+    extras["diffuse_color"] = diffuse_linear.squeeze()
+
+    rgb = specular_linear + diffuse_linear
+
+    return rgb.squeeze(), extras
+    
+
 
