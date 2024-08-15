@@ -12,6 +12,8 @@ import os
 from typing import Dict, Optional, Union
 
 import torch
+import torch.nn.functional as F
+
 import math
 from diff_surfel_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
@@ -573,7 +575,6 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     means3D = pc.get_xyz
     means2D = screenspace_points
     opacity = pc.get_opacity
-    numG = means3D.shape[0]
 
      # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -595,16 +596,6 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     else:
         scales = pc.get_scaling
         rotations = pc.get_rotation
-
-    #prepare all input for pbr: material, wi, wo, normals, light
-    view_pos = viewpoint_camera.camera_center.repeat(numG, 1) # (numG, 3)
-    wo_W = safe_normalize(view_pos - means3D) # (numG, 3) wo指向表面外侧
-
-    normalsG_W = pc.get_normals # (numG, 3)
-    # assume dual visiable, need to verify this，看看正负号对不对
-    cos = dot(normalsG_W, wo_W) # (numG, 1)
-    mul = torch.where(cos > 0, 1., -1.) # (numG, 1)
-    normalsG_W = normalsG_W * mul # (numG, 3)
 
     diffuse=pc.get_albedo
     roughness=pc.get_roughness
@@ -640,6 +631,13 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     render_normal = allmap[2:5]
     render_normal = (render_normal.permute(1,2,0) @ (viewpoint_camera.world_view_transform[:3,:3].T)).permute(2,0,1)
 
+    render_normal = torch.where(
+        torch.norm(render_normal, dim=0, keepdim=True) > 0,
+        F.normalize(render_normal, dim=0, p=2),
+        render_normal,
+    )
+
+
     # get median depth map
     render_depth_median = allmap[5:6]
     render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
@@ -664,6 +662,11 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     # remember to multiply with accum_alpha since render_normal is unnormalized.
     surf_normal = surf_normal * (render_alpha).detach()
 
+    surf_normal = torch.where(
+        torch.norm(surf_normal, dim=0, keepdim=True) > 0,
+        F.normalize(surf_normal, dim=0, p=2),
+        surf_normal,
+    )
 
     pre_blend = {
         # "kd_map": diffuse,
@@ -686,17 +689,15 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp)[0]
         deffered_input[k] = image
-        
+
     rgb, extras = gshader_deferred_shading(light, 
                          render_normal.permute(1,2,0).contiguous(), 
-                         view_dirs.permute(1,2,0).contiguous(), 
+                         view_dirs, 
                          deffered_input["kd_map"].permute(1,2,0).contiguous(), 
                          deffered_input["kr_map"][0,:,:][None,:,:].permute(1,2,0).contiguous(), 
                          deffered_input["ks_map"].permute(1,2,0).contiguous(), 
                          brdf_lut)
 
-    # print(rgb.shape)
-    # print(deffered_input["cr_map"].shape)
     if color_residual:
         rgb =rgb.permute(2,0,1) + deffered_input["cr_map"] # color residuals
     rgb = rgb.clamp(min=0.0, max=1.0)
@@ -704,7 +705,14 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     # mask = (render_alpha >= 0.5).all(0)[None,:,:] # (1, H, W)
     # mask = (render_normal != 0).all(0, keepdim=True)
     # rgb_image = torch.where(mask, rgb, bg_color[:,None,None])
-    rgb_image = rgb
+
+    rgb_image = torch.where(
+        torch.norm(render_normal, dim=0, keepdim=True) > 0,
+        rgb,
+        bg_color[:,None,None],
+    )
+
+    # rgb_image = rgb
     rets =  {"render": rgb_image,
             "viewspace_points": means2D,
             "visibility_filter" : radii > 0,

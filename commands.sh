@@ -58,3 +58,6 @@ do
     python metrics.py -m "./all_test/${model}_test01"
 done
 
+
+python pbr_deffered_train.py -s ../data/ref_synthetic/teapot/ -m ./all_test/teapot_deff01 --lambda_dist 1000.0 --eval --warmup_iterations 7001
+

@@ -84,31 +84,33 @@ def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline
 
         gt = view.original_image[0:3, :, :]
 
-
         mask = (render_pkg["rend_normal"] != 0).all(0, keepdim=True) #[1,h,w]
-        image = torch.where(mask, render_pkg["render"], background[:,None,None])
         if "cr_map" in render_pkg.keys() and render_pkg["cr_map"] is not None:
             residual = torch.where(mask, render_pkg["cr_map"], background[:,None,None])
             torchvision.utils.save_image(residual, os.path.join(residual_path, '{0:05d}'.format(idx) + ".png"))
         
-        torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(render_pkg["render"], os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
         
 
-        diffuse_rgb, specular_rgb, albedo, roughness, specular = render_pkg["diffuse_color"], render_pkg["specular_color"], render_pkg["kd_map"], render_pkg["kr_map"], render_pkg["ks_map"]
+
+        kd_map, ks_map, kr_map = render_pkg["kd_map"], render_pkg["ks_map"], render_pkg["kr_map"]
+        diffuse_rgb, specular_rgb = render_pkg["diffuse_color"], render_pkg["specular_color"]  
         
+        pbr_image = torch.cat([render_pkg["render"], diffuse_rgb, specular_rgb], dim=2)  # [3, H, 3W]
+        torchvision.utils.save_image(pbr_image, os.path.join(pbr_path, f"{idx:05d}_pbr.png"))
+
         diffuse_rgb = torch.where(mask, diffuse_rgb, background[:,None,None])
         specular_rgb = torch.where(mask, specular_rgb, background[:,None,None])
 
-        albedo = torch.where(mask, albedo, torch.zeros_like(albedo))
-        roughness = torch.where(mask, roughness, torch.zeros_like(roughness))
-        specular = torch.where(mask, specular, torch.zeros_like(specular))
+        albedo = torch.where(mask, kd_map, torch.zeros_like(kd_map))
+        roughness = torch.where(mask, kr_map, torch.zeros_like(kr_map))
+        specular = torch.where(mask, ks_map, torch.zeros_like(ks_map))
 
 
         brdf_map = torch.cat([albedo, roughness, specular,], dim=2,)
         torchvision.utils.save_image(brdf_map, os.path.join(brdf_path, f"{idx:05d}_brdf.png"))
-        pbr_image = torch.cat([image, diffuse_rgb, specular_rgb], dim=2)  # [3, H, 3W]
-        torchvision.utils.save_image(pbr_image, os.path.join(pbr_path, f"{idx:05d}_pbr.png"))
+
 
 
         # alpha = apply_depth_colormap(render_pkg["rend_alpha"][0][...,None], min=0., max=1.).permute(2,0,1)

@@ -183,9 +183,9 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         # dist_loss = lambda_dist * (dist[mask]).mean()
         dist_loss = lambda_dist * (dist).mean()
 
-        alpha_loss = 0.001 * zero_one_loss(render_pkg["rend_alpha"])
-
-        total_loss = loss + dist_loss + normal_loss + alpha_loss
+        # alpha_loss = 0.001 * zero_one_loss(render_pkg["rend_alpha"])
+        # + alpha_loss
+        total_loss = loss + dist_loss + normal_loss 
         total_loss.backward()
         iter_end.record()
 
@@ -194,14 +194,14 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
-            ema_alpha_for_log = 0.4 * alpha_loss.item() + 0.6 * ema_alpha_for_log
+            # ema_alpha_for_log = 0.4 * alpha_loss.item() + 0.6 * ema_alpha_for_log
 
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
                     "distort": f"{ema_dist_for_log:.{5}f}",
                     "normal": f"{ema_normal_for_log:.{5}f}",
-                    "alpha": f"{ema_alpha_for_log:.{5}f}",
+                    # "alpha": f"{ema_alpha_for_log:.{5}f}",
                     "Points": f"{len(gaussians.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)

@@ -322,15 +322,16 @@ def gshader_deferred_shading(
     diffuse_raw = kd.reshape(1, H, W, 3)
     roughness = kr.reshape(1, H, W, 1)
     spec_col = ks.reshape(1, H, W, 3)
-    diff_col = 1.0 - ks
+    diff_col = 1.0 - spec_col
 
-    results = {}
     reflvec = (
-        2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs
+        2.0 * (nrmvec * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * nrmvec - view_dirs
     )  # [1, H, W, 3]
 
     ambient = dr.texture(light.diffuse[None, ...], nrmvec.contiguous(), filter_mode='linear', boundary_mode='cube')
     specular_linear = ambient * diff_col
+
+    # spec0 = specular_linear.squeeze().permute(2,0,1)
 
     NoV = saturate_dot(nrmvec, view_dirs)  # [1, H, W, 1]
     fg_uv = torch.cat((NoV, roughness), dim=-1)  # [1, H, W, 2]
@@ -344,18 +345,34 @@ def gshader_deferred_shading(
     spec = dr.texture(light.specular[0][None, ...], 
                           reflvec.contiguous(), 
                           mip=list(m[None, ...] for m in light.specular[1:]), 
-                        #   mip_level_bias=miplevel[:,:,None].permute(1,2,0).contiguous(), #[1,1,numG]
                           mip_level_bias=miplevel[..., 0], 
                           filter_mode='linear-mipmap-linear', 
                           boundary_mode='cube') # [1, H, W, 3]
 
+    # mask = (nrmvec != 0).all(0, keepdim=True) #[1,h,w,3] 都不是0，才为true
+    # zero_tensor = torch.zeros_like(reflvec).cuda()
+    # reflvec_masked = torch.where(mask, reflvec, zero_tensor)
+    # spec_masked = dr.texture(light.specular[0][None, ...], 
+    #                          reflvec_masked.contiguous(), 
+    #                          mip=list(m[None, ...] for m in light.specular[1:]),
+    #                          mip_level_bias=miplevel[..., 0], 
+    #                          filter_mode='linear-mipmap-linear',
+    #                          boundary_mode='cube') 
+
     reflectance = spec_col * fg_lookup[...,0:1] + fg_lookup[...,1:2]
+    # spec1 = (spec * reflectance).squeeze().permute(2,0,1)
+    
+    
     specular_linear += spec * reflectance
 
     extras = {"specular_color": specular_linear.squeeze().permute(2,0,1)}
 
+    # extras['spec0'] = spec0
+    # extras['spec1'] = spec1
+
     diffuse_linear = torch.sigmoid(diffuse_raw - np.log(3.0))
     extras["diffuse_color"] = diffuse_linear.squeeze().permute(2,0,1)
+    
 
     rgb = specular_linear + diffuse_linear
 
