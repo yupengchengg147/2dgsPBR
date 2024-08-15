@@ -352,10 +352,10 @@ def gshader_deferred_shading(
     reflectance = spec_col * fg_lookup[...,0:1] + fg_lookup[...,1:2]
     specular_linear += spec * reflectance
 
-    extras = {"specular_color": specular_linear.squeeze()}
+    extras = {"specular_color": specular_linear.squeeze().permute(2,0,1)}
 
     diffuse_linear = torch.sigmoid(diffuse_raw - np.log(3.0))
-    extras["diffuse_color"] = diffuse_linear.squeeze()
+    extras["diffuse_color"] = diffuse_linear.squeeze().permute(2,0,1)
 
     rgb = specular_linear + diffuse_linear
 

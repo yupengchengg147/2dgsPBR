@@ -347,7 +347,7 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
 def pbr_render_gshader(viewpoint_camera, pc: GaussianModel, 
                light:CubemapLight, pipe, bg_color : torch.Tensor, 
                brdf_lut: Optional[torch.Tensor] = None, 
-               scaling_modifier = 1.0, override_color = None, speed=False):
+               scaling_modifier = 1.0, override_color = None, speed=False, color_residual=True):
     
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -436,13 +436,14 @@ def pbr_render_gshader(viewpoint_camera, pc: GaussianModel,
     diffuse_color = brdf_pkg['diffuse'].squeeze() # (N, 3) 
     specular_color = brdf_pkg['specular'].squeeze() # (N, 3) 
 
-    if pc.brdf_dim>0:
-        shs_view = pc.get_features.view(-1, 3, (pc.brdf_dim+1)**2)
+    if pc.brdf_dim>0 and color_residual:
+        shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.brdf_dim+1)**2)
         dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_opacity.shape[0], 1))
         dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
         sh2rgb = eval_sh(pc.brdf_dim, shs_view, dir_pp_normalized)
         color_delta = sh2rgb
         colors_precomp += color_delta
+    else: color_delta = None
 
     rendered_image, radii, allmap = rasterizer(
         means3D = means3D,
@@ -539,7 +540,8 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
                light:CubemapLight, pipe, bg_color : torch.Tensor, 
                view_dirs : torch.Tensor, #[H,W,3]
                brdf_lut: Optional[torch.Tensor] = None, 
-               scaling_modifier = 1.0, override_color = None, speed=False):
+               scaling_modifier = 1.0, override_color = None, speed=False,
+               color_residual=True):
     
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -608,15 +610,15 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     roughness=pc.get_roughness
     specular= pc.get_specular
 
+    if color_residual:
+        shs_view = pc.get_features.view(-1, 3, (pc.brdf_dim+1)**2)
+        dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_opacity.shape[0], 1))
+        dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+        sh2rgb = eval_sh(pc.brdf_dim, shs_view, dir_pp_normalized)
+        color_delta = sh2rgb
+    else:
+        color_delta = None
 
-    shs_view = pc.get_features.view(-1, 3, (pc.brdf_dim+1)**2)
-    dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_opacity.shape[0], 1))
-    dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-    sh2rgb = eval_sh(pc.brdf_dim, shs_view, dir_pp_normalized)
-    color_delta = sh2rgb
-
-
-    
 
     rendered_image, radii, allmap = rasterizer(
         means3D = means3D,
@@ -667,9 +669,10 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
         # "kd_map": diffuse,
         "ks_map": specular,
         "kr_map": roughness.repeat(1, 3),
-        "cr_map": color_delta,
     }
-
+    if color_residual:
+        pre_blend["cr_map"] = color_delta 
+    
     # here should keep tracking gradient of all input
     for k in pre_blend.keys():
         if pre_blend[k] is None: continue
@@ -694,12 +697,12 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
 
     # print(rgb.shape)
     # print(deffered_input["cr_map"].shape)
-    
-    rgb =rgb.permute(2,0,1) + deffered_input["cr_map"] # color residuals
+    if color_residual:
+        rgb =rgb.permute(2,0,1) + deffered_input["cr_map"] # color residuals
     rgb = rgb.clamp(min=0.0, max=1.0)
 
     # mask = (render_alpha >= 0.5).all(0)[None,:,:] # (1, H, W)
-    # mask = (normal_map != 0).all(0, keepdim=True)
+    # mask = (render_normal != 0).all(0, keepdim=True)
     # rgb_image = torch.where(mask, rgb, bg_color[:,None,None])
     rgb_image = rgb
     rets =  {"render": rgb_image,
@@ -716,7 +719,7 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     if speed:
         return rets
 
-    rets.update(deffered_input) # kd_map, ks_map, kr_map, cr_map
+    rets.update(deffered_input) # kd_map, ks_map, kr_map, cr_map(when color_residual true)
     rets.update(extras) #diffuse_color, specular_color
     return rets
 
