@@ -154,6 +154,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # remember to multiply with accum_alpha since render_normal is unnormalized.
     surf_normal = surf_normal * (render_alpha).detach()
 
+    try:
+        render_normal.retain_grad()
+    except:
+        pass
 
     rets.update({
             'rend_alpha': render_alpha,
@@ -689,6 +693,13 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp)[0]
         deffered_input[k] = image
+    
+    try:
+        render_normal.retain_grad()
+    except:
+        pass
+
+    
 
     rgb, extras = gshader_deferred_shading(light, 
                          render_normal.permute(1,2,0).contiguous(), 
@@ -703,14 +714,14 @@ def pbr_render_deffered(viewpoint_camera, pc: GaussianModel,
     rgb = rgb.clamp(min=0.0, max=1.0)
 
     # mask = (render_alpha >= 0.5).all(0)[None,:,:] # (1, H, W)
-    # mask = (render_normal != 0).all(0, keepdim=True)
-    # rgb_image = torch.where(mask, rgb, bg_color[:,None,None])
+    mask = (render_normal != 0).all(0, keepdim=True)
+    rgb_image = torch.where(mask, rgb, bg_color[:,None,None])
 
-    rgb_image = torch.where(
-        torch.norm(render_normal, dim=0, keepdim=True) > 0,
-        rgb,
-        bg_color[:,None,None],
-    )
+    # rgb_image = torch.where(
+    #     torch.norm(render_normal, dim=0, keepdim=True) > 0,
+    #     rgb,
+    #     bg_color[:,None,None],
+    # )
 
     # rgb_image = rgb
     rets =  {"render": rgb_image,

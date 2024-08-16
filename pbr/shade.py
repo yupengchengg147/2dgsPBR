@@ -311,7 +311,7 @@ def gshader_deferred_shading(
     normals: torch.Tensor,  # [H, W, 3]
     view_dirs: torch.Tensor,  # [H, W, 3]
     kd: torch.Tensor,  # [H, W, 3]
-    kr: torch.Tensor,  # [W, 1]
+    kr: torch.Tensor,  # [H, W, 1]
     ks: torch.Tensor,
     brdf_lut: torch.Tensor,
 ):

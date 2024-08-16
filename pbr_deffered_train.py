@@ -114,6 +114,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             rend_normal  = render_pkg['rend_normal']
             normal_from_d = render_pkg['surf_normal']
 
+            # 这里不需要也不应该加mask
             # mask = (rend_normal != 0).all(0, keepdim=True)
             # image = torch.where(mask, image, background[:,None,None])
 
@@ -174,7 +175,8 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
         # regularization
-        lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
+        # lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
+        lambda_normal = opt.lambda_normal if (iteration > 5000 and iteration < opt.warmup_iterations) else 0.0
         lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
 
         # normal_error = (1 - (rend_normal[mask.repeat(3,1,1)] * normal_from_d[mask.repeat(3,1,1)]).sum(dim=0))[None]
@@ -196,6 +198,13 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
             # ema_alpha_for_log = 0.4 * alpha_loss.item() + 0.6 * ema_alpha_for_log
 
+
+            # # gaussians._normal.grad:
+            a = rend_normal.grad.data.clone() #[3,h,w]
+            norm_grad = torch.norm(a, dim=0).cpu().mean()
+            b = gaussians._opacity.grad.data.clone()
+            opacity_grad = torch.abs(b).cpu().mean()
+
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
@@ -216,9 +225,9 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
                 tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
             
             if iteration < opt.warmup_iterations:
-                training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+                training_report(tb_writer, iteration, norm_grad, opacity_grad, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             else:
-                training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
+                training_report(tb_writer, iteration, norm_grad, opacity_grad, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
                                 testing_iterations, scene, pbr_render_deffered, 
                                 (cubemap, pipe, background, view_dirs, brdf_lut)
                                 )
