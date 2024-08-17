@@ -177,7 +177,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
         # regularization
         # lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
         lambda_normal = opt.lambda_normal if (iteration > 5000 and iteration < opt.warmup_iterations) else 0.0
-        lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+        lambda_dist = opt.lambda_dist if (iteration > 3000 and iteration < opt.warmup_iterations ) else 0.0
 
         # normal_error = (1 - (rend_normal[mask.repeat(3,1,1)] * normal_from_d[mask.repeat(3,1,1)]).sum(dim=0))[None]
         normal_error = (1 - (rend_normal * normal_from_d).sum(dim=0))[None]
@@ -274,9 +274,9 @@ if __name__ == "__main__":
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[15000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[14_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[15_000, 30_000])
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[20000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--start_checkpoint", type=str, default = None)
     # parser.add_argument('--metallic', action='store_true', default=False)
