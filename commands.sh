@@ -1,7 +1,7 @@
 
 
 #!/bin/bash
-export TORCH_HOME=/root/autodl-tmp/torch_chpt
+
 
 # 定义你要替换的项目列表
 models=("drums" "chair" "mic" "materials")

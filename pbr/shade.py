@@ -209,7 +209,7 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
     results = {}
     diffuse_light = dr.texture(
         light.diffuse[None, ...],  # [1, 6, 16, 16, 3]
-        normals.contiguous(),
+        normals.contiguous(), #[1,1,numG,3]
         filter_mode="linear",
         boundary_mode="cube",
     ).squeeze() # [numG, 3]
@@ -217,8 +217,8 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
     #ignore indirect illumination for now
     # if occlusion is not None:
     #   diffuse_light = diffuse_light * occlusion[None] + (1 - occlusion[None]) * irradiance[None]
-
     diffuse_rgb = albedo * diffuse_light # [numG, 3]
+
     NoV = saturate_dot(normals.squeeze(), wo)
     fg_uv = torch.cat((NoV, roughness), dim=-1)[None,None,:,:] #[1,1,numG,2]
     fg_lookup = dr.texture(
@@ -226,26 +226,27 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
         fg_uv.contiguous(), #[1,1,numG,2]
         filter_mode="linear",
         boundary_mode="clamp",
-    ).squeeze() # [numG, 2] #用这种方式查询会不会有超出内存？
+    ).squeeze() # [numG, 2] 
 
     miplevel = light.get_mip(roughness) # [numG, 1]
     spec = dr.texture(
         light.specular[0][None, ...],  # [1, 6, 256, 256, 3]
-        wi.contiguous(),
+        wi.contiguous(), #[1,1,numG,3]
         mip=list(m[None, ...] for m in light.specular[1:]),
         mip_level_bias=miplevel[:,:,None].permute(1,2,0).contiguous(),#[1,1,numG]
         filter_mode="linear-mipmap-linear",
         boundary_mode="cube",
-    ).squeeze() # [numG, 3]
+    ).squeeze() # [numG, 3] specular light
 
     if metallic is None:
         F0 = torch.ones_like(albedo) * 0.04  # [numG, 3]
     else:
         F0 = (1.0 - metallic) * 0.04 + albedo * metallic
-    reflectance = F0 * fg_lookup[..., 0:1] + fg_lookup[..., 1:2]  # [numG, 3]
+    reflectance = F0 * fg_lookup[..., 0:1] + fg_lookup[..., 1:2]  # [numG, 3] lighnt transport for specular
     specular_rgb = spec * reflectance
 
     rgb = diffuse_rgb + specular_rgb
+
     results["rgb"] = rgb
     results["diffuse"] = diffuse_rgb
     results["specular"] = specular_rgb    

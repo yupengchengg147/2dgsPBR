@@ -54,6 +54,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.metallic = False
         self.render_items = ['RGB', 'Alpha', 'Normal', 'Depth', 'Edge', 'Curvature']
         super().__init__(parser, "Loading Parameters", sentinel)
 
@@ -68,12 +69,15 @@ class PipelineParams(ParamGroup):
         self.compute_cov3D_python = False
         self.depth_ratio = 0.0
         self.debug = False
+        self.gamma = True
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 30_000
         self.warmup_iterations = 7001
+        self.normal_reg_untii_iter = 30_000
+
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_delay_mult = 0.01
@@ -104,8 +108,8 @@ class OptimizationParams(ParamGroup):
         self.brdf_mlp_lr_max_steps = 30_000
         
         # lr for materials
-        self.specular_lr = 0.0002
-        self.roughness_lr = 0.0002
+        self.materials_lr = 0.0002
+        # self.roughness_lr = 0.0002
 
 
         super().__init__(parser, "Optimization Parameters")

@@ -21,6 +21,22 @@ from utils.point_utils import depth_to_normal
 # import nvdiffrast.torch as dr
 from pbr import CubemapLight, pbr_shading_2dgs, saturate_dot
 from utils.general_utils import safe_normalize, reflect, dot
+import numpy as np
+
+def linear_to_srgb(linear: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+    if isinstance(linear, torch.Tensor):
+        """Assumes `linear` is in [0, 1], see https://en.wikipedia.org/wiki/SRGB."""
+        eps = torch.finfo(torch.float32).eps
+        srgb0 = 323 / 25 * linear
+        srgb1 = (211 * torch.clamp(linear, min=eps) ** (5 / 12) - 11) / 200
+        return torch.where(linear <= 0.0031308, srgb0, srgb1)
+    elif isinstance(linear, np.ndarray):
+        eps = np.finfo(np.float32).eps
+        srgb0 = 323 / 25 * linear
+        srgb1 = (211 * np.maximum(eps, linear) ** (5 / 12) - 11) / 200
+        return np.where(linear <= 0.0031308, srgb0, srgb1)
+    else:
+        raise NotImplementedError
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
     """
@@ -152,6 +168,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # remember to multiply with accum_alpha since render_normal is unnormalized.
     surf_normal = surf_normal * (render_alpha).detach()
 
+    render_normal.retain_grad()
 
     rets.update({
             'rend_alpha': render_alpha,
@@ -166,7 +183,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 def pbr_render(viewpoint_camera, pc: GaussianModel, 
                light:CubemapLight, pipe, bg_color : torch.Tensor, 
                brdf_lut: Optional[torch.Tensor] = None, 
-               scaling_modifier = 1.0, override_color = None, speed=False):
+               scaling_modifier = 1.0, override_color = None, speed=False, w_metallic=True):
     
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -230,15 +247,27 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
     view_pos = viewpoint_camera.camera_center.repeat(numG, 1) # (numG, 3)
     wo_W = safe_normalize(view_pos - means3D) # (numG, 3) wo指向表面外侧
 
-    normalsG_W = pc.get_normals # (numG, 3)
-    # assume dual visiable, need to verify this，看看正负号对不对
+
+    ngw = pc.get_normals
+    try:
+        ngw.retain_grad()
+    except:
+        pass
+
+    normalsG_W = ngw  # (numG, 3)
     cos = dot(normalsG_W, wo_W) # (numG, 1)
     mul = torch.where(cos > 0, 1., -1.) # (numG, 1)
     normalsG_W = normalsG_W * mul # (numG, 3)
+
     wi_W = safe_normalize(reflect(wo_W, normalsG_W)) # (numG, 3)
+
     albedo=pc.get_albedo
     roughness=pc.get_roughness
-    metallic=pc.get_metallic
+    if w_metallic:
+        metallic=pc.get_metallic
+    else:
+        metallic = None
+
     results = pbr_shading_2dgs(light = light, 
                               normals=normalsG_W[None, None,:,:], # ( 1, 1, numG, 3)
                               wo=wo_W, # (numG, 3)
@@ -265,6 +294,11 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
     )
 
 
+    rendered_image.clamp(min=0.0, max=1.0)
+    if pipe.gamma:
+        rendered_image = linear_to_srgb(rendered_image.squeeze())
+
+
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     rets =  {"render": rendered_image,
@@ -280,6 +314,7 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
     # transform normal from view space to world space
     render_normal = allmap[2:5]
     render_normal = (render_normal.permute(1,2,0) @ (viewpoint_camera.world_view_transform[:3,:3].T)).permute(2,0,1)
+    # render_normal = safe_normalize(render_normal)
     
     # get median depth map
     render_depth_median = allmap[5:6]
@@ -304,6 +339,10 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
     surf_normal = surf_normal.permute(2,0,1)
     # remember to multiply with accum_alpha since render_normal is unnormalized.
     surf_normal = surf_normal * (render_alpha).detach()
+    # surf_normal = safe_normalize(surf_normal)
+
+
+    # render_normal.retain_grad()
 
 
     rets.update({
@@ -312,7 +351,10 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
             'rend_dist': render_dist,
             'surf_depth': surf_depth,
             'surf_normal': surf_normal,
+            'ng_w': ngw
     })
+
+    
 
     if speed:
         return rets
@@ -322,8 +364,9 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
         "specular_rgb": specular_color,
         "albedo": albedo,
         "roughness": roughness.repeat(1, 3),
-        "metallic": metallic.repeat(1, 3),
+        "metallic": metallic.repeat(1, 3) if w_metallic else None,
     }
+
     out_extras = {}
     with torch.no_grad():
         for k in render_extras.keys():
@@ -339,8 +382,10 @@ def pbr_render(viewpoint_camera, pc: GaussianModel,
                 cov3D_precomp = cov3D_precomp)[0]
             out_extras[k] = image
     rets.update(out_extras)
+    if not w_metallic:
+        rets["metallic"] = torch.ones_like(rets["roughness"]).cuda()
+
 
     return rets
 
-# alpha_tosave = apply_depth_colormap(rets["rend_alpha"].detach().permute(1,2,0).cpu().numpy()).permute(2,0,1)
-# torchvision.utils.save_image(alpha_tosave,alpha_path)
+

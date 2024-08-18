@@ -26,7 +26,7 @@ except ImportError:
 
 
 
-def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, metallic=False):
+def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -80,6 +80,7 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    print("metallic?", dataset.metallic)
     for iteration in range(first_iter, opt.iterations + 1):        
 
         iter_start.record()
@@ -92,15 +93,17 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
+        # Every 1000 its we increase the levels of SH up to a maximum degree
+        if iteration % 1000 == 0:
+            gaussians.oneupSHdegree()
+
         if iteration < opt.warmup_iterations:
-            # Every 1000 its we increase the levels of SH up to a maximum degree
-            if iteration % 1000 == 0:
-                gaussians.oneupSHdegree()
             render_pkg = render(viewpoint_cam, gaussians, pipe, background)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             dist = render_pkg["rend_dist"]
             rend_normal  = render_pkg['rend_normal']
             normal_from_d = render_pkg['surf_normal']
+
         elif iteration == opt.warmup_iterations:
             cubemap.base.requires_grad = True
         
@@ -115,7 +118,8 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             #     gaussians._metallic = None
             # else:
             #     gaussians.set_requires_grad("metallic", True)
-            gaussians.set_requires_grad("metallic", True)
+            if dataset.metallic:
+                gaussians.set_requires_grad("metallic", True)
             continue
         else:
             for param_group in light_optimizer.param_groups:
@@ -124,34 +128,34 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
                     param_group['lr'] = lr
             cubemap.build_mips()
             render_pkg = pbr_render(
-            viewpoint_camera=viewpoint_cam,
-            pc=gaussians,
-            light=cubemap,
-            pipe=pipe,
-            bg_color=background,
-            brdf_lut=brdf_lut,
-            speed=True)
+                viewpoint_camera=viewpoint_cam,
+                pc=gaussians,
+                light=cubemap,
+                pipe=pipe,
+                bg_color=background,
+                brdf_lut=brdf_lut,
+                speed=True,
+                w_metallic= dataset.metallic
+                )
 
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
             alpha, rend_normal, dist, surf_depth, normal_from_d = render_pkg["rend_alpha"], render_pkg["rend_normal"], render_pkg["rend_dist"], render_pkg["surf_depth"], render_pkg["surf_normal"]
 
             # diffuse_rgb, specular_rgb, albedo, roughness, metallic = render_pkg["diffuse_rgb"], render_pkg["specular_rgb"], render_pkg["albedo"], render_pkg["roughness"], render_pkg["metallic"]
-            # mask = (render_pkg["rend_alpha"] != 0).all(0)[None,:,:]
-            # image = torch.where(mask, render_pkg["render"], background[:,None,None])
+
 
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
         # regularization
-        lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
-        lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+        lambda_normal = opt.lambda_normal if iteration > opt.warmup_iterations and iteration < opt.normal_reg_untii_iter else 0.0
+        lambda_dist = opt.lambda_dist if iteration > 3000 or iteration > opt.warmup_iterations else 0.0
 
-        # normal_error = (1 - (rend_normal[mask.repeat(3,1,1)] * normal_from_d[mask.repeat(3,1,1)]).sum(dim=0))[None]
         normal_error = (1 - (rend_normal * normal_from_d).sum(dim=0))[None]
         normal_loss = lambda_normal * (normal_error).mean()
-        # dist_loss = lambda_dist * (dist[mask]).mean()
+
         dist_loss = lambda_dist * (dist).mean()
 
         total_loss = loss + dist_loss + normal_loss
@@ -163,6 +167,17 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
+
+            
+            b = gaussians._opacity.grad.data.clone()
+            opacity_grad = torch.abs(b).cpu().mean()
+            c = gaussians._xyz.grad.data.clone()[:,2] #[n,]
+            z_grad = torch.abs(c).cpu().mean()
+            grad_dict = {"opacity_grad": opacity_grad, "z_grad": z_grad}
+            if iteration > opt.warmup_iterations:
+                a = render_pkg['ng_w'].grad.data.clone() #[n,3]
+                norm_grad = torch.norm(a, dim=-1).cpu().mean()
+                grad_dict["norm_grad"] = norm_grad
 
             if iteration % 10 == 0:
                 loss_dict = {
@@ -183,9 +198,9 @@ def pbr_training(dataset, opt, pipe, testing_iterations, saving_iterations, chec
                 tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
             
             if iteration < opt.warmup_iterations:
-                training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+                training_report(tb_writer, grad_dict, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             else:
-                training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
+                training_report(tb_writer, grad_dict, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
                                 testing_iterations, scene, pbr_render, 
                                 (cubemap, pipe, background, brdf_lut)
                                 )
@@ -237,7 +252,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    parser.add_argument('--metallic', action='store_true', default=False)
+    # parser.add_argument('--metallic', action='store_true', default=False)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -252,7 +267,7 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    pbr_training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.metallic)
+    pbr_training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint)
 
     # All done
     print("\nTraining complete.")

@@ -197,9 +197,9 @@ class GaussianModel:
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
 
-            {"params": [self._albedo], "lr": training_args.opacity_lr, "name": "albedo"},
-            {"params": [self._roughness], "lr": training_args.opacity_lr, "name": "roughness"},
-            {"params": [self._metallic], "lr": training_args.opacity_lr, "name": "metallic"},
+            {"params": [self._albedo], "lr": training_args.materials_lr, "name": "albedo"},
+            {"params": [self._roughness], "lr": training_args.materials_lr, "name": "roughness"},
+            {"params": [self._metallic], "lr": training_args.materials_lr, "name": "metallic"},
             
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},

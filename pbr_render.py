@@ -27,7 +27,7 @@ from utils.image_utils import apply_depth_colormap, turbo_cmap
 import numpy as np
 
 
-def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline, background):
+def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline, background, w_metallic):
 
     brdf_lut = get_brdf_lut().cuda()
 
@@ -69,7 +69,8 @@ def render_set(model_path, name, iteration, views, gaussians, cubemap,  pipeline
           pipe=pipeline,
           bg_color=background,
           brdf_lut=brdf_lut,
-          speed=False)
+          speed=False,
+          w_metallic= w_metallic)
 
         torch.cuda.synchronize()
 
@@ -150,10 +151,10 @@ def render_sets(dataset : ModelParams, chkp_path: str, pipeline : PipelineParams
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(dataset.model_path, "train", first_iter, scene.getTrainCameras(), gaussians, cubemap,  pipeline, background)
+             render_set(dataset.model_path, "train", first_iter, scene.getTrainCameras(), gaussians, cubemap,  pipeline, background, dataset.metallic)
 
         if not skip_test:
-             render_set(dataset.model_path, "test", first_iter, scene.getTestCameras(), gaussians, cubemap, pipeline, background)
+             render_set(dataset.model_path, "test", first_iter, scene.getTestCameras(), gaussians, cubemap, pipeline, background, dataset.metallic)
 
 
              
