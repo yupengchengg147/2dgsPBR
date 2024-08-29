@@ -14,3 +14,4 @@ eval
 **/tmp
 submodules/simple-knn/build
 all_test/
+*.md

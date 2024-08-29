@@ -8,6 +8,8 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+from typing import Optional
+from PIL import Image
 
 import torch
 from torch import nn
@@ -17,7 +19,8 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
+                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", 
+                 normal_path: Optional[str] = None
                  ):
         super(Camera, self).__init__()
 
@@ -57,6 +60,35 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+        self.gt_normal = None
+        self.gt_normal_mask = None
+        if normal_path is not None:
+            try:
+                self.gt_normal, self.gt_normal_mask = readGT_normal(normal_path, self.data_device)
+            except:
+                self.gt_normal, self.gt_normal_mask = None, None
+
+
+def readGT_normal(normal_path, device):
+    img = Image.open(normal_path)
+    normal_array = np.array(img)
+    normal_array_rgb = normal_array[:, :, :3] #[H,W,3]
+    h, w, _ = normal_array_rgb.shape
+    variance = np.var(normal_array_rgb, axis=-1)
+    threshold = 0.001
+    invalid_mask = variance < threshold
+    normal_mask = np.ones((h, w), dtype=bool) 
+    updated_normal_mask = np.where(invalid_mask, 0, normal_mask) # [H,W]
+
+    gt_normal = torch.tensor(normal_array_rgb, dtype=torch.float32).permute(2, 0, 1).to(device)   # [3,H,W]
+    gt_normal = gt_normal/255.0 * 2.0 -1.
+
+    gt_normal_mask = torch.tensor(updated_normal_mask, dtype=torch.bool).unsqueeze(0).to(device) # [1,H,W] 
+
+    #TODO： gt_noraml要rescale到什么范围？ [0,1] or [-1,1]
+
+    return gt_normal, gt_normal_mask
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):

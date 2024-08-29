@@ -204,7 +204,7 @@ def pbr_shading(
 
 
 def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_lut):
-    #[#batch, h, w, C]
+    #[#batch, h, w, C] = (1, 1, numG, 3)
 
     results = {}
     diffuse_light = dr.texture(
@@ -213,6 +213,7 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
         filter_mode="linear",
         boundary_mode="cube",
     ).squeeze() # [numG, 3]
+    
 
     #ignore indirect illumination for now
     # if occlusion is not None:
@@ -249,6 +250,89 @@ def pbr_shading_2dgs(light, normals, wo, wi, albedo, roughness, metallic, brdf_l
 
     results["rgb"] = rgb
     results["diffuse"] = diffuse_rgb
-    results["specular"] = specular_rgb    
+    results["specular"] = specular_rgb   
+    results["diffuse_light"] = diffuse_light
+    results["specular_light"] = spec 
     return results
 
+
+
+def gsir_deferred_shading(
+        light: CubemapLight,
+        normals: torch.Tensor,  # [H, W, 3]
+        view_dirs: torch.Tensor,  # [H, W, 3]
+        albedo: torch.Tensor,  # [H, W, 3]
+        roughness: torch.Tensor,  # [H, W, 1]
+        brdf_lut: torch.Tensor,
+        metallic: Optional[torch.Tensor] = None,
+        ):
+
+    H, W, _ = normals.shape
+
+    normals = normals.reshape(1, H, W, 3)
+    view_dirs = view_dirs.reshape(1, H, W, 3)
+    albedo = albedo.reshape(1, H, W, 3)
+    roughness = roughness.reshape(1, H, W, 1)
+    
+    results = {}
+    ref_dirs = (
+        2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs
+    )  # [1, H, W, 3]
+
+    diffuse_light = dr.texture(
+        light.diffuse[None, ...],  # [1, 6, 16, 16, 3]
+        normals.contiguous(),  # [1, H, W, 3]
+        filter_mode="linear",
+        boundary_mode="cube",
+    )  # [1, H, W, 3]
+
+    # # no occlusions for now
+    # if occlusion is not None:
+    #     diffuse_light = diffuse_light * occlusion[None] + (1 - occlusion[None]) * irradiance[None]
+    diffuse_rgb = diffuse_light * albedo  # [1, H, W, 3]
+
+    # specular
+    NoV = saturate_dot(normals, view_dirs)  # [1, H, W, 1]
+    fg_uv = torch.cat((NoV, roughness), dim=-1)  # [1, H, W, 2]
+    fg_lookup = dr.texture(
+        brdf_lut,  # [1, 256, 256, 2]
+        fg_uv.contiguous(),  # [1, H, W, 2]
+        filter_mode="linear",
+        boundary_mode="clamp",
+    )  # [1, H, W, 2]
+
+    # Roughness adjusted specular env lookup
+    miplevel = light.get_mip(roughness)  # [1, H, W, 1]
+    spec = dr.texture(
+        light.specular[0][None, ...],  # [1, 6, env_res, env_res, 3]
+        ref_dirs.contiguous(),  # [1, H, W, 3]
+        mip=list(m[None, ...] for m in light.specular[1:]),
+        mip_level_bias=miplevel[..., 0],  # [1, H, W]
+        filter_mode="linear-mipmap-linear",
+        boundary_mode="cube",
+    )  # [1, H, W, 3]
+   
+
+    # Compute aggregate lighting
+    if metallic is None:
+        F0 = torch.ones_like(albedo) * 0.04  # [1, H, W, 3]
+    else:
+        F0 = (1.0 - metallic) * 0.04 + albedo * metallic
+    reflectance = F0 * fg_lookup[..., 0:1] + fg_lookup[..., 1:2]  # [1, H, W, 3]
+    specular_rgb = spec * reflectance  # [1, H, W, 3]
+
+    render_rgb = diffuse_rgb + specular_rgb  # [1, H, W, 3]
+
+    render_rgb = render_rgb.squeeze().permute(2,0,1)  # [H, W, 3]
+
+
+
+    extras = {
+        "diffuse_light": diffuse_light.squeeze().permute(2,0,1),
+        "specular_light": spec.squeeze().permute(2,0,1),
+        "diffuse_rgb": diffuse_rgb.squeeze().permute(2,0,1),
+        "specular_rgb": specular_rgb.squeeze().permute(2,0,1),
+    }
+
+
+    return render_rgb, extras
